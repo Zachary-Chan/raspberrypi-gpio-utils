@@ -21,12 +21,14 @@ bool isValid(const std::vector<uint8_t>& data) {
 		}
 	}
 	
+	
 	unsigned sum { (static_cast<unsigned> (data[0] ) + static_cast<unsigned> (data[1] ) 
 					+ static_cast<unsigned> (data[2] ) + static_cast<unsigned> (data[3] ) ) 
 					& static_cast<unsigned> (0xFF) };
 	if (sum != static_cast<unsigned> (data[4] ) ) {
 		return false;
 	}
+	
 
 	return true;
 }
@@ -67,7 +69,7 @@ bool workout(std::vector<uint8_t>& data, int last_state) {
 			last_state = digitalRead(k_GPIO_PIN);
 
 			// is a bit-1
-			if (counter_high > 50) {
+			if (counter_high > 28) {
 				data[index_data] |= (1 << (7 - index_bit) );
 			} /* is a bit-0 */ else {
 				continue;

@@ -8,7 +8,7 @@ int main() {
 
     while (true) {
         readDht11Data();
-        delay (2000);
+        delay (1500);
     }
     
 }
