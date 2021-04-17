@@ -1,140 +1,186 @@
-// The documentation of DHT11 specifies the exact interval time periods between each phase.
-// But when implementing the module, they don't follow it at all!
-// So it mess up all the code design, I have no choice but do it like this.
-// Anyway it can run properly!
-
+#include "dht11.h"
 #include <wiringPi.h>
 #include <iostream>
-#include <cmath>
 #include <vector>
-#include <chrono>
+#include <stdbool.h>
 
-const int k_GPIO_PIN { 23 };
-const int k_MAX_TIMING { 255 };
+// timeout number of loop 
+const int k_MAX_LOOP { 200 };
 
-void readDhtData();
+// check the checksum 
+bool isValid(const std::vector<uint8_t>& data) {
+	
+	for (int counter {}; counter < 5; counter++ ) {
+		if (data[counter] != 0) {
+			break;
+		}
 
-
-int main() {
-	std::cout << "Raspberry Pi wiringPi DHT11 Temperature and Humidity test Program" << std::endl
-		<< "Calculating... It may take up to 20 seconds, please wait" << std::endl;
-
-	wiringPiSetupGpio();
-
-	while (true) {
-		readDhtData();
-
-		delay( 1000 );
+		// all the data is 0
+		if (counter == 4) {
+			return false;
+		}
 	}
+	
+	unsigned sum { (static_cast<unsigned> (data[0] ) + static_cast<unsigned> (data[1] ) 
+					+ static_cast<unsigned> (data[2] ) + static_cast<unsigned> (data[3] ) ) 
+					& static_cast<unsigned> (0xFF) };
+	if (sum != static_cast<unsigned> (data[4] ) ) {
+		return false;
+	}
+
+	return true;
 }
 
-void readDhtData() {
-	
-	uint8_t checksum {};
-	// restore the dht data-- 5 uint8_t vector
-	std::vector<uint8_t> data { 0, 0, 0, 0, 0 };
+// return true if all works well, otherwise false 
+bool workout(std::vector<uint8_t>& data, int last_state) {
 
-	// pull pin down for 20 milliseconds 
-	pinMode( k_GPIO_PIN, OUTPUT );
-	digitalWrite( k_GPIO_PIN, LOW );
-	delay( 20 );
-
-	// then pull it up for 40 microseconds 
-	digitalWrite( k_GPIO_PIN, HIGH );
-	delayMicroseconds( 40 );
-
-	//delayMicroseconds(5);
-	// prepare to read the pin
-	pinMode( k_GPIO_PIN, INPUT );
-	
-
-	/*
-	// wait for the dht to be prepared for the transmission 
-	delayMicroseconds( 80 );	// LOW voltage
-	delayMicroseconds( 80 );	// HIGH voltage
-	*/
-
-	for (int counter {}; (LOW == digitalRead(k_GPIO_PIN) ); counter++) {
-		/*
-		int counter { };
-		counter++;
-		*/
-		if(counter == k_MAX_TIMING) {
-			goto skip;
-			
-		}
-		delayMicroseconds(1);
+	// if missed the first 50 us of LOW voltage input 
+	if (digitalRead(k_GPIO_PIN) != last_state) {
+		return false;
 	}
 
-	// int last_state { HIGH };
-	// go through the first 80 microseconds HIGH voltage period 
-	for (int counter {}; HIGH == digitalRead(k_GPIO_PIN); counter++) {
-		/*
-		int counter { };
-		counter++;
-		*/
-		if (counter == k_MAX_TIMING) {
-			goto skip;
+
+	for (int index_data {}; index_data < 5; index_data++ ) {
+		for (int index_bit {}; index_bit < 8; index_bit++ ) {
+
+			if (last_state != digitalRead(k_GPIO_PIN) ) {
+				return false;
+			}
 			
-		}
-		delayMicroseconds(1);
-	}
-
-	// 40 bits data flow 
-	for (int i {}; i < 5; i++) {
-		for (int j {}; j < 8; j++ ) {
-
-			for (int counter {}; LOW == digitalRead(k_GPIO_PIN); counter++) {
-				if (counter == k_MAX_TIMING) {
-					goto skip;
-					
-				}
-
+			// spec: 50 us of LOW voltage input 
+			while (last_state == digitalRead(k_GPIO_PIN) ) {
 				delayMicroseconds(1);
 			}
+			last_state = digitalRead(k_GPIO_PIN);
 
-			// conut the time and judge if it is HIGH or LOW voltage 
-			int counter {};
-			for ( ; HIGH == digitalRead(k_GPIO_PIN); ) {
-				if (counter == k_MAX_TIMING) {
-					goto skip;
-					
+			// spec: 26-28us of HIGH voltage for bit-0, 70 us for bit-1
+			int counter_high { };
+			while (last_state == digitalRead(k_GPIO_PIN) ) {
+				// if missed all the transaction process and the resistor has pulled the voltage high
+				if (counter_high == 140) {
+					return false;
 				}
 
-				counter++;
+				counter_high++;
 				delayMicroseconds(1);
 			}
-			// the last period is more than 70 miscroseconds (50 for secure)
-			// then it is the bit 1
+			last_state = digitalRead(k_GPIO_PIN);
 
-			if (counter > 50) {
-				data[i] |= ( 1 << (7 - j) );
-			} /* the bit 0 */ else {
+			// is a bit-1
+			if (counter_high > 50) {
+				data[index_data] |= (1 << (7 - index_bit) );
+			} /* is a bit-0 */ else {
 				continue;
 			}
 		}
 	}
 
-	if ( 0 == data[0] == data[1] == data[2] == data[3] == data[4] ){
-		goto skip;
+	// if checksum does NOT match
+	if ( !isValid(data) ) {
+		return false;
 	}
 
+	return true;
+}
 
-	checksum = ( (data[0] + data[1] + data[2] + data[3] ) & 0xFF);
-	if (checksum != data[4] ) {
-		goto skip;
-	}
-
-	// for debuging
 /*
-	for (const auto& x : data) {
-		std::cout << static_cast<unsigned int> (x) << std::endl;
-	}
-*/
-	std::cout << "Humidity: " << static_cast<unsigned> (data[0] ) << "." << static_cast<unsigned> (data[1] ) << " %"
-		<< "	Temperature: " << static_cast<unsigned> (data[2] ) << "." << static_cast<unsigned> (data[3] )<< " *C"
-		<< std::endl;
+// BAD Method
+// use 5*8 for loop to work on the data
+// return true if all works well, otherwise false 
+bool twoLayerLoopWorkout(int last_state) {
+	// 5 8-bit dht data
+	// std::vector<uint8_t> data {0, 0, 0, 0, 0};
 
-skip:
-	return;
+	for (int data_index {}; data_index < 5; data_index++ ) {
+		for (int bit_index {}; bit_index < 8; bit_index++ ) {
+			
+			if (last_state != digitalRead(k_GPIO_PIN) ) {
+				return false;
+			}
+			
+			// spec: 50 us of input LOW voltage 
+			// Practical mic Counter: 23-55us, average 23us
+			while (last_state == digitalRead(k_GPIO_PIN) ) {
+				delayMicroseconds(1);
+			}
+			last_state = digitalRead(k_GPIO_PIN);
+
+			// spec: 26-28us for bit-0, 70us for bit-1
+			// practival mic Counter: 9-24us for bit-0, 
+			int counter {};
+			while (last_state == digitalRead(k_GPIO_PIN) ) {
+				counter++;
+				delayMicroseconds(1);
+			}
+			last_state = digitalRead(k_GPIO_PIN);
+			// std::cout << counter << std::endl;
+		}
+	}
+
+	return true;
+}
+*/
+
+void printData(const std::vector<uint8_t>& data) {
+	
+	std::vector<unsigned> data_refined {};
+	for (const auto& x : data) {
+		data_refined.push_back(static_cast<unsigned> (x) );
+	}
+
+	std::cout << "Humidity: " << data_refined[0] << "." << data_refined[1] << " %"
+		<< "	" << "Temperature: " << data_refined[2] << "." << data_refined[3] << " *C"
+		<< std::endl;
+}
+
+void readDht11Data() {
+
+	// create 5 8-bit vector to store the dht data
+	std::vector<uint8_t> data {0, 0, 0, 0, 0};
+
+
+	pinMode(k_GPIO_PIN, OUTPUT);
+	
+	// spec: at least 18 ms, pull down for 20 ms
+	digitalWrite(k_GPIO_PIN, LOW);
+	delay(20);
+
+	// spec: 20-40us
+	digitalWrite(k_GPIO_PIN, HIGH);
+	delayMicroseconds(40);
+
+	pinMode(k_GPIO_PIN, INPUT);
+	// if missed the 80 us of LOW voltage input 
+	if (digitalRead(k_GPIO_PIN) != LOW) {
+		return;
+	}
+
+	// last pin input voltage state 
+	int last_state { digitalRead(k_GPIO_PIN) };
+	// std::cout << last_state << std::endl;
+	
+	// spec: 80us of input LOW voltage 
+	// Practical mic Counter: 22-56us
+	while (last_state == digitalRead(k_GPIO_PIN) ) {
+		delayMicroseconds(1);
+	}
+	last_state = digitalRead(k_GPIO_PIN);
+
+	// spec: 80 us of input HIGH voltage 
+	// Practical mic Counter: 26-89us, average 38 us
+	while (last_state == digitalRead(k_GPIO_PIN) ) {
+		delayMicroseconds(1);
+	}
+	last_state = digitalRead(k_GPIO_PIN);
+
+	// if data NOT correct 
+	if ( !workout(data, last_state) ) {
+		for (auto& x : data) {
+			x = 0;
+		}
+
+		return;
+	}
+
+	printData(data);
 }

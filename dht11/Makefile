@@ -1,7 +1,13 @@
+CXXFLAGS := -Wall
 LIBS := -lwiringPi
+STD := -std=c++17
+DEPS := dht11.h
 
-dht11: dht11.o 
-	g++ -o $@ $< $(LIBS)
+%.o : %.cpp $(DEPS)
+	g++ -c -o $@ $< $(STD) $(CXXFLAGS)
+
+dht11: main.o dht11.o 
+	g++ -o $@ $^ $(LIBS) 
 
 .PHONY := clean
 
